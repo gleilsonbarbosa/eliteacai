@@ -1,0 +1,587 @@
+import { useState, useEffect, useCallback } from 'react';
+import { supabase } from '../lib/supabase';
+import { PDVCashRegister, PDVCashRegisterEntry, PDVCashRegisterSummary } from '../types/pdv';
+
+// Type for PDV Operator
+interface PDVOperator {
+  id: string;
+  name: string;
+  code: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  last_login: string | null;
+}
+
+// Função auxiliar para log de debug
+const logDebug = (message: string, data?: any) => {
+  console.log(`🔍 DEBUG: ${message}`, data);
+};
+
+export const usePDVCashRegister = () => {
+  const [currentRegister, setCurrentRegister] = useState<PDVCashRegister | null>(null);
+  const [entries, setEntries] = useState<PDVCashRegisterEntry[]>([]);
+  const [operators, setOperators] = useState<PDVOperator[]>([]);
+  const [summary, setSummary] = useState<PDVCashRegisterSummary>({
+    opening_amount: 0,
+    sales_total: 0,
+    total_income: 0, 
+    other_income_total: 0,
+    total_expense: 0,
+    expected_balance: 0,
+    actual_balance: 0,
+    difference: 0,
+    sales_count: 0,
+    delivery_total: 0,
+    delivery_count: 0,
+    total_all_sales: 0,
+    sales: {}
+  });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchOperators = useCallback(async () => {
+    try {
+      console.log('👥 Buscando operadores...');
+      
+      const { data: operatorsData, error: operatorsError } = await supabase
+        .from('pdv_operators')
+        .select('*')
+        .order('name', { ascending: true });
+      
+      if (operatorsError) {
+        console.error('Erro ao buscar operadores:', operatorsError);
+        throw operatorsError;
+      }
+      
+      setOperators(operatorsData || []);
+      console.log(`✅ Carregados ${operatorsData?.length || 0} operadores`);
+    } catch (err) {
+      console.error('Erro ao carregar operadores:', err);
+      // Don't throw here to avoid breaking the main flow
+      setOperators([]);
+    }
+  }, []);
+
+  const fetchCashRegisterStatus = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      console.log('🔄 Buscando status do caixa e movimentações...');
+      
+      // Verificar se existe um caixa aberto
+      const { data: openRegister, error: openError } = await supabase
+        .from('pdv_cash_registers')
+        .select('*')
+        .is('closed_at', null)
+        .order('opened_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      if (openError) {
+        console.error('Erro ao buscar caixa ativo:', openError);
+        throw openError;
+      }
+      
+      if (openRegister) {
+        console.log('✅ Caixa aberto encontrado:', openRegister.id);
+        
+        // Buscar entradas do caixa 
+        const { data: entriesData, error: entriesError } = await supabase
+          .from('pdv_cash_entries')
+          .select('*')
+          .eq('register_id', openRegister.id)
+          .order('created_at', { ascending: false });
+          
+        if (entriesError) {
+          console.error('Erro ao buscar entradas:', entriesError);
+          throw entriesError;
+        }
+        
+        setEntries(entriesData || []);
+        
+        console.log(`✅ Carregadas ${entriesData?.length || 0} movimentações de caixa`);
+        
+        // Buscar resumo do caixa com todos os dados necessários
+        const { data: summaryData, error: summaryError } = await supabase
+          .rpc('get_pdv_cash_summary', { p_register_id: openRegister.id })
+          .single();
+        
+        if (summaryError) {
+          console.error('❌ Erro ao buscar resumo do caixa:', summaryError);
+          throw summaryError;
+        }
+        
+        if (summaryData.success && summaryData.data) {
+          // Combinar dados do caixa com o resumo
+          setCurrentRegister({
+            ...openRegister
+          });          
+          
+          // Processar os dados do resumo
+          const data = summaryData.data;
+          setSummary({
+            opening_amount: Number(data.opening_amount) || 0,
+            sales_total: Number(data.sales_total) || 0,
+            total_income: Number(data.total_income) || 0,
+            other_income_total: Number(data.other_income_total) || 0,
+            total_expense: Number(data.total_expense) || 0,
+            expected_balance: Number(data.expected_balance) || 0,
+            actual_balance: Number(data.actual_balance) || 0,
+            difference: Number(data.difference) || 0,
+            sales_count: Number(data.sales_count) || 0,
+            delivery_total: Number(data.delivery_total) || 0,
+            delivery_count: Number(data.delivery_count) || 0,
+            total_all_sales: Number(data.total_all_sales) || 0,
+            sales: data.sales || {}
+          });
+          
+          console.log('✅ Resumo do caixa processado:', {
+            sales_total: Number(data.sales_total) || 0,
+            total_income: Number(data.total_income) || 0,
+            other_income_total: Number(data.other_income_total) || 0,
+            total_expense: Number(data.total_expense) || 0
+          });
+          
+          return;
+        } else {
+          setCurrentRegister(openRegister);          
+        }
+        
+        // Buscar resumo do caixa com todos os canais (PDV e delivery)
+        const { data: generalSummaryData, error: generalSummaryError } = await supabase
+          .rpc('get_pdv_cash_summary', { p_register_id: openRegister.id })
+          .single();
+        
+        if (generalSummaryError) {
+          console.error('Erro ao buscar resumo do caixa:', generalSummaryError);
+          
+          // Não falhar completamente, apenas registrar o erro
+          console.log('⚠️ Erro ao buscar resumo do caixa:', generalSummaryError);
+          
+          // Tentar buscar dados manualmente
+          try {
+            // Buscar vendas PDV
+            const { data: salesData } = await supabase
+              .from('pdv_cash_entries')
+              .select('*')
+              .eq('register_id', openRegister.id)
+              .eq('type', 'income')
+              .like('description', 'Venda #%');
+              
+            // Buscar vendas Delivery
+            const { data: deliveryData } = await supabase
+              .from('pdv_cash_entries')
+              .select('*')
+              .eq('register_id', openRegister.id)
+              .eq('type', 'income')
+              .like('description', 'Delivery #%');
+              
+            // Buscar outras entradas
+            const { data: otherIncomeData } = await supabase
+              .from('pdv_cash_entries')
+              .select('*')
+              .eq('register_id', openRegister.id) 
+              .eq('type', 'income')
+              .not('description', 'ilike', 'Venda #%')
+              .not('description', 'ilike', 'Delivery #%');
+              
+            // Buscar saídas
+            const { data: expenseData } = await supabase
+              .from('pdv_cash_entries')
+              .select('*')
+              .eq('register_id', openRegister.id)
+              .eq('type', 'expense');
+              
+            // Calcular totais
+            const salesTotal = salesData?.reduce((sum, item) => sum + item.amount, 0) || 0;
+            const deliveryTotal = deliveryData?.reduce((sum, item) => sum + item.amount, 0) || 0;
+            const otherIncomeTotal = otherIncomeData?.reduce((sum, item) => sum + item.amount, 0) || 0;
+            const expenseTotal = expenseData?.reduce((sum, item) => sum + item.amount, 0) || 0;
+            
+            // Calcular saldo esperado
+            const expectedBalance = openRegister.opening_amount + salesTotal + deliveryTotal + otherIncomeTotal - expenseTotal; // Correctly subtract expenses
+            
+            // Definir resumo manualmente
+            setSummary({
+              opening_amount: openRegister.opening_amount || 0,
+              sales_total: salesTotal,
+              total_income: salesTotal + deliveryTotal + otherIncomeTotal,
+              other_income_total: otherIncomeTotal,
+              total_expense: expenseTotal,
+              expected_balance: expectedBalance,
+              actual_balance: openRegister.closing_amount || expectedBalance,
+              difference: (openRegister.closing_amount || expectedBalance) - expectedBalance,
+              sales_count: salesData?.length || 0,
+              delivery_total: deliveryTotal,
+              delivery_count: deliveryData?.length || 0,
+              total_all_sales: salesTotal + deliveryTotal,
+              sales: {}
+            });
+            
+            console.log('✅ Resumo calculado manualmente:', {
+              salesTotal,
+              deliveryTotal,
+              otherIncomeTotal,
+              expenseTotal,
+              expectedBalance
+            });
+            
+            return;
+          } catch (manualError) {
+            console.error('Erro ao calcular resumo manualmente:', manualError);
+            
+            // Definir valores padrão para o resumo
+            setSummary({
+              opening_amount: openRegister.opening_amount || 0,
+              sales_total: 0,
+              total_income: 0,
+              other_income_total: 0,
+              total_expense: 0,
+              expected_balance: openRegister.opening_amount || 0,
+              actual_balance: openRegister.opening_amount || 0,
+              difference: 0,
+              sales_count: 0,
+              delivery_total: 0,
+              delivery_count: 0,
+              total_all_sales: 0,
+              sales: {}
+            });
+            
+            return;
+          }
+        }
+        
+        if (generalSummaryData.success && generalSummaryData.data) {
+          console.log('✅ Dados do resumo do caixa:', generalSummaryData.data);
+          
+          // Log detalhado para diagnóstico
+          console.log('🔍 Detalhes do resumo do caixa:', {
+            opening_amount: generalSummaryData.data.opening_amount,
+            sales_total: generalSummaryData.data.sales_total,
+            delivery_total: generalSummaryData.data.delivery_total,
+            other_income_total: generalSummaryData.data.other_income_total,
+            total_expense: generalSummaryData.data.total_expense,
+            expected_balance: generalSummaryData.data.expected_balance
+          });
+          
+          try {
+            setSummary({
+              opening_amount: Number(generalSummaryData.data.opening_amount) || 0,
+              sales_total: Number(generalSummaryData.data.sales_total) || 0, 
+              total_income: Number(generalSummaryData.data.total_income) || 0,
+              other_income_total: Number(generalSummaryData.data.other_income_total) || 0, 
+              total_expense: Number(generalSummaryData.data.total_expense) || 0,
+              expected_balance: Number(generalSummaryData.data.expected_balance) || 0,
+              actual_balance: Number(generalSummaryData.data.actual_balance) || 0,
+              difference: Number(generalSummaryData.data.difference) || 0,
+              sales_count: Number(generalSummaryData.data.sales_count) || 0,
+              delivery_total: Number(generalSummaryData.data.delivery_total) || 0,
+              delivery_count: Number(generalSummaryData.data.delivery_count) || 0,
+              total_all_sales: Number(generalSummaryData.data.total_all_sales) || 0,
+              sales: generalSummaryData.data.sales || {}
+            });
+            
+            console.log('✅ Definindo estado do resumo:', {
+              sales_total: Number(generalSummaryData.data.sales_total) || 0,
+              sales_count: Number(generalSummaryData.data.sales_count) || 0,
+              delivery_count: Number(generalSummaryData.data.delivery_count) || 0,
+              total_all_sales: Number(generalSummaryData.data.total_all_sales) || 0,
+              delivery_total: Number(generalSummaryData.data.delivery_total) || 0,
+              other_income_total: Number(generalSummaryData.data.other_income_total) || 0,
+              total_expense: Number(generalSummaryData.data.total_expense) || 0,
+              expected_balance: Number(generalSummaryData.data.expected_balance) || 0
+            });
+          } catch (err) {
+            console.error('❌ Error setting summary state:', err);
+          }
+        } else {
+          console.error('❌ Resumo do caixa retornou dados inválidos:', generalSummaryData);
+        }
+      } else {
+        console.log('ℹ️ Nenhum caixa aberto no momento');
+        setCurrentRegister(null);
+        setEntries([]);
+        setSummary({
+          opening_amount: 0,
+          sales_total: 0,
+          total_income: 0,
+          other_income_total: 0,
+          total_expense: 0,
+          expected_balance: 0,
+          actual_balance: 0,
+          difference: 0,
+          sales_count: 0,
+          delivery_total: 0,
+          delivery_count: 0,
+          total_all_sales: 0,
+          sales: {}
+        });
+      }
+    } catch (err) {
+      console.error('Erro ao carregar caixa:', err);
+      setError(err instanceof Error ? err.message : 'Erro ao carregar caixa');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const openCashRegister = useCallback(async (openingAmount: number) => {
+    try {
+      if (openingAmount <= 0) {
+        throw new Error('O valor de abertura deve ser maior que zero.');
+      }
+      
+      console.log('🚀 Abrindo caixa com valor:', openingAmount);
+      
+      const { data, error } = await supabase
+        .from('pdv_cash_registers')
+        .insert([{
+          opening_amount: openingAmount,
+          opened_at: new Date().toISOString()
+        }])
+        .select()
+        .single();
+        
+      if (error) {
+        console.error('Erro ao abrir caixa:', error);
+        throw error;
+      }
+      
+      setCurrentRegister(data);
+      console.log('✅ Caixa aberto com sucesso:', data.id);
+      
+      await fetchCashRegisterStatus();
+       
+      return data;
+    } catch (err) {
+      console.error('Erro ao abrir caixa:', err);
+      throw err;
+    }
+  }, [fetchCashRegisterStatus]);
+
+  const closeCashRegister = useCallback(async (closingAmount: number) => {
+    console.log('🔒 Iniciando fechamento de caixa com valor:', closingAmount);
+    console.log('💰 Saldo esperado:', summary.expected_balance);
+    console.log('🧮 Diferença calculada:', closingAmount - summary.expected_balance);
+    
+    try {
+      if (!currentRegister) {
+        return { success: false, error: 'Nenhum caixa aberto para fechar' };
+      }
+      
+      if (closingAmount <= 0) {
+        return { success: false, error: 'O valor de fechamento deve ser maior que zero.' };
+      }
+      
+      // Use the RPC function to close the register
+      const { data, error } = await supabase
+        .rpc('close_pdv_cash_register', {
+          p_register_id: currentRegister.id,
+          p_closing_amount: closingAmount
+        });
+      
+      if (error) {
+        console.error('❌ Erro ao fechar caixa:', error);
+        return {
+          success: false,
+          error: error.message || 'Erro ao fechar caixa'
+        };
+      }
+      
+      console.log('✅ Caixa fechado com sucesso. Dados:', data);
+      await fetchCashRegisterStatus();
+      
+      return { 
+        success: true, 
+        data: data.data
+      };
+    } catch (err) {
+      console.error('❌ Erro ao fechar caixa (exceção):', err);
+      return { 
+        success: false, 
+        error: err instanceof Error ? err.message : 'Erro desconhecido ao fechar caixa' 
+      };
+    }
+  }, [currentRegister, fetchCashRegisterStatus]);
+
+  const addCashEntry = useCallback(async (entry: {
+    type: 'income' | 'expense';
+    amount: number;
+    description: string;
+    payment_method?: string;
+  }) => {
+    try {
+      if (!currentRegister) {
+        throw new Error('Nenhum caixa aberto. Abra o caixa antes de adicionar entradas.');
+      }
+      
+      if (!entry.description || entry.amount <= 0) {
+        throw new Error('Descrição e valor são obrigatórios');
+      }
+      
+      console.log('💰 Adicionando entrada ao caixa:', entry);
+      
+      // Garantir que payment_method seja 'dinheiro' se não for especificado
+      const payment_method = entry.payment_method || 'dinheiro';
+      
+      const { data, error } = await supabase
+        .from('pdv_cash_entries')
+        .insert([{
+          register_id: currentRegister.id,
+          type: entry.type,
+          amount: entry.amount,
+          description: entry.description,
+          payment_method: payment_method
+        }])
+        .select()
+        .single();
+      
+      if (error) {
+        console.error('Erro ao adicionar entrada:', error);
+        throw error;
+      }
+      
+      console.log('✅ Entrada adicionada com sucesso:', data);
+      await fetchCashRegisterStatus();
+      
+      return data;
+    } catch (err) {
+      console.error('Erro ao adicionar entrada:', err);
+      throw err;
+    }
+  }, [currentRegister, fetchCashRegisterStatus]);
+
+  const getCashRegisterReport = useCallback(async (filters?: {
+    startDate?: string;
+    endDate?: string;
+    operatorId?: string;
+  }) => {
+    const startDate = filters?.startDate || new Date(new Date().setDate(new Date().getDate() - 7)).toISOString().split('T')[0];
+    const endDate = filters?.endDate || new Date().toISOString().split('T')[0];
+    const operatorId = filters?.operatorId;
+    
+    try {
+      console.log('📊 Buscando relatório de caixa com filtros:', { startDate, endDate, operatorId });
+      
+      // Call the RPC function to get detailed cash register history
+      const { data, error } = await supabase
+        .rpc('get_cash_register_history', { 
+          start_date: startDate || new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().split('T')[0],
+          end_date: endDate || new Date().toISOString().split('T')[0],
+          limit_count: 50
+        });
+      
+      if (error) {
+        console.error('Erro ao buscar relatório de caixa:', error);
+        setError(`Erro ao buscar relatório de caixa: ${error.message}`);
+        return [];
+      }
+      
+      console.log(`✅ Relatório gerado com ${data?.length || 0} registros de caixa`);
+      setError(null); // Clear any previous errors on success
+      
+      // Process the data to include summary information
+      const processedData = await Promise.all((data || []).map(async (register) => {
+        try {
+          // Get summary for each register
+          const { data: summaryData, error: summaryError } = await supabase
+            .rpc('get_pdv_cash_summary', { p_register_id: register.id })
+            .single();
+          
+          if (summaryError) {
+            console.error(`Erro ao buscar resumo para caixa ${register.id}:`, summaryError);
+            return {
+              ...register,
+              summary: {
+                sales_total: 0,
+                delivery_total: 0,
+                other_income_total: 0,
+                total_expense: 0,
+                expected_balance: register.opening_amount || 0
+              }
+            };
+          }
+          
+          return {
+            ...register,
+            summary: summaryData?.data || {
+              sales_total: 0,
+              delivery_total: 0,
+              other_income_total: 0,
+              total_expense: 0,
+              expected_balance: register.opening_amount || 0
+            }
+          };
+        } catch (err) {
+          console.error(`Erro ao processar caixa ${register.id}:`, err);
+          return {
+            ...register,
+            summary: {
+              sales_total: 0,
+              delivery_total: 0,
+              other_income_total: 0,
+              total_expense: 0,
+              expected_balance: register.opening_amount || 0
+            }
+          };
+        }
+      }));
+      
+      return processedData;
+    } catch (err) {
+      console.error('Erro ao carregar relatório de caixa:', err);
+      setError(err instanceof Error ? err.message : 'Erro desconhecido ao carregar relatório');
+      return [];
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchCashRegisterStatus();
+    fetchOperators();
+    
+    // Verificar se existem registros nas tabelas
+    const checkTables = async () => {
+      try {
+        // Verificar registros na tabela pdv_cash_registers
+        const { count: registerCount, error: registerError } = await supabase
+          .from('pdv_cash_registers')
+          .select('*', { count: 'exact', head: true });
+        
+        if (registerError) throw registerError;
+        
+        // Verificar registros na tabela pdv_cash_entries
+        const { count: entriesCount, error: entriesError } = await supabase
+          .from('pdv_cash_entries')
+          .select('*', { count: 'exact', head: true });
+        
+        if (entriesError) throw entriesError;
+        
+        console.log('🔍 Verificação de tabelas:', {
+          pdv_cash_registers: registerCount,
+          pdv_cash_entries: entriesCount
+        });
+      } catch (err) {
+        console.error('Erro ao verificar tabelas:', err);
+      }
+    };
+    
+    checkTables();
+  }, [fetchCashRegisterStatus, fetchOperators]);
+
+  return {
+    currentRegister,
+    entries,
+    operators,
+    summary, 
+    loading,
+    error,
+    isOpen: !!currentRegister,
+    openCashRegister,
+    closeCashRegister,
+    addCashEntry,
+    refreshData: fetchCashRegisterStatus,
+    getCashRegisterReport
+  };
+};
