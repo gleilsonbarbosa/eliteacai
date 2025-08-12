@@ -12,55 +12,6 @@ import PromotionsAlert from '../../components/PromotionsAlert';
 import CashbackAnimation from '../../components/CashbackAnimation';
 import ConfirmationModal from '../../components/ConfirmationModal';
 
-<<<<<<< HEAD
-// Combine visible stores and test store for geolocation checks
-const ALL_STORE_LOCATIONS = [...STORE_LOCATIONS, TEST_STORE];
-=======
-const ITEMS_PER_PAGE = 10;
-
-function PromoMessage() {
-  const today = new Date().getDay(); // 0 = Sunday, 1 = Monday, etc.
-  
-  const getPromoMessage = () => {
-    switch (today) {
-      case 1: // Monday
-        return {
-          product: 'copo de 300g',
-          price: '9,99'
-        };
-      case 2: // Tuesday
-        return {
-          product: 'copo de 500g',
-          price: '15,99'
-        };
-      case 3: // Wednesday
-        return {
-          product: 'copo de 400g',
-          price: '12,99'
-        };
-      case 4: // Thursday
-        return {
-          product: 'quilo',
-          price: '37,99'
-        };
-      default:
-        return {
-          product: 'copo de 300g',
-          price: '9,99'
-        };
-    }
-  };
-
-  const promo = getPromoMessage();
-
-  return (
-    <div className="bg-purple-50 text-purple-700 p-4 rounded-xl text-center font-medium mt-6 border border-purple-100">
-      💥 Aproveite! Hoje tem {promo.product} SEM PESO por <span className="font-bold">R${promo.price}</span>! Só na Elite Açaí!
-    </div>
-  );
-}
->>>>>>> 5b306f3 (atualização cashback)
-
 const ITEMS_PER_PAGE = 10;
 
 function PromoMessage() {
@@ -240,15 +191,6 @@ function ClientDashboard() {
       setUserLocation(position);
       setLocationError(null);
 
-<<<<<<< HEAD
-      const closestStore = getClosestStore(position, ALL_STORE_LOCATIONS);
-      if (closestStore && isWithinStoreRange(position, closestStore)) {
-        setSelectedStore(closestStore);
-        setSelectedRedemptionStore(closestStore);
-      }
-    } catch (error) {
-      setLocationError('Não foi possível obter sua localização');
-=======
       const closestStore = getClosestStore(position.coords.latitude, position.coords.longitude);
       const withinRange = isWithinStoreRange(position.coords.latitude, position.coords.longitude);
       
@@ -264,7 +206,6 @@ function ClientDashboard() {
     } catch (error) {
       setLocationError(error.message || 'Não foi possível obter sua localização');
       setIsWithinStore(false);
->>>>>>> 5b306f3 (atualização cashback)
       console.error('Location error:', error);
     }
   };
@@ -274,16 +215,6 @@ function ClientDashboard() {
     setLoading(true);
 
     try {
-<<<<<<< HEAD
-      const { data, error } = await supabase
-        .from('customers')
-        .select('*')
-        .eq('phone', phone)
-        .single();
-
-      if (error || !data) {
-        toast.error('Telefone não encontrado');
-=======
       // Find customer by email
       const { data: customerData, error: customerError } = await supabase
         .from('customers')
@@ -293,19 +224,13 @@ function ClientDashboard() {
 
       if (customerError || !customerData) {
         toast.error('Email não encontrado');
->>>>>>> 5b306f3 (atualização cashback)
         return;
       }
 
       // Verify password
       const { data: authData, error: authError } = await supabase.rpc('verify_customer_password', {
-<<<<<<< HEAD
-        customer_phone: phone,
-        password_input: password
-=======
         p_email: customerData.email,
         p_password: password
->>>>>>> 5b306f3 (atualização cashback)
       });
 
       if (authError || !authData) {
@@ -317,14 +242,6 @@ function ClientDashboard() {
       await supabase
         .from('customers')
         .update({ last_login: new Date().toISOString() })
-<<<<<<< HEAD
-        .eq('id', data.id);
-
-      setCustomer(data);
-      
-      if (rememberMe) {
-        localStorage.setItem('loginData', JSON.stringify({ email, password }));
-=======
         .eq('id', customerData.id);
 
       setCustomer(customerData);
@@ -334,7 +251,6 @@ function ClientDashboard() {
           email: loginEmail, 
           password 
         }));
->>>>>>> 5b306f3 (atualização cashback)
         localStorage.setItem('rememberMe', 'true');
       } else {
         localStorage.removeItem('loginData');
@@ -394,15 +310,11 @@ function ClientDashboard() {
       // Send welcome notification if WhatsApp consent is given
       if (whatsAppConsent) {
         try {
-<<<<<<< HEAD
-          await sendWhatsAppNotification(phone, 'welcome', { name });
-=======
           await sendWhatsAppNotification({
             customerId: data.id,
             type: 'welcome',
             data: { name }
           });
->>>>>>> 5b306f3 (atualização cashback)
         } catch (error) {
           console.error('Error sending welcome notification:', error);
         }
@@ -417,15 +329,12 @@ function ClientDashboard() {
 
   const handlePurchase = async (e: React.FormEvent) => {
     e.preventDefault();
-<<<<<<< HEAD
-=======
     
     if (!isWithinStore) {
       toast.error('Você precisa estar dentro de uma das lojas para registrar uma compra');
       return;
     }
     
->>>>>>> 5b306f3 (atualização cashback)
     if (!selectedStore || !transactionAmount) return;
 
     setIsSubmitting(true);
@@ -466,18 +375,11 @@ function ClientDashboard() {
       // Send WhatsApp notification if consent is given
       if (customer?.whatsapp_consent) {
         try {
-<<<<<<< HEAD
-          await sendWhatsAppNotification(customer.phone, 'purchase', {
-            amount: amount.toFixed(2),
-            cashback: cashbackAmount.toFixed(2),
-            store: selectedStore.name
-=======
           await sendWhatsAppNotification({
             customerId: customer.id,
             type: 'purchase',
             amount,
             cashbackAmount
->>>>>>> 5b306f3 (atualização cashback)
           });
         } catch (error) {
           console.error('Error sending purchase notification:', error);
@@ -493,15 +395,12 @@ function ClientDashboard() {
 
   const handleRedemption = async (e: React.FormEvent) => {
     e.preventDefault();
-<<<<<<< HEAD
-=======
     
     if (!isWithinStore) {
       toast.error('Você precisa estar dentro de uma das lojas para resgatar cashback');
       return;
     }
     
->>>>>>> 5b306f3 (atualização cashback)
     if (!selectedRedemptionStore || !redemptionAmount) return;
 
     const amount = parseFloat(redemptionAmount);
@@ -511,13 +410,8 @@ function ClientDashboard() {
       return;
     }
 
-<<<<<<< HEAD
-    if (amount < 5) {
-      toast.error('O valor mínimo para resgate é R$ 5,00');
-=======
     if (amount < 1) {
       toast.error('O valor mínimo para resgate é R$ 1,00');
->>>>>>> 5b306f3 (atualização cashback)
       return;
     }
 
@@ -531,11 +425,7 @@ function ClientDashboard() {
           amount,
           cashback_amount: 0,
           type: 'redemption',
-<<<<<<< HEAD
-          status: 'approved',
-=======
           status: 'pending',
->>>>>>> 5b306f3 (atualização cashback)
           store_id: selectedRedemptionStore.id,
           location: userLocation ? {
             latitude: userLocation.coords.latitude,
@@ -552,23 +442,7 @@ function ClientDashboard() {
       await loadTransactions();
       await calculateAvailableBalance();
       
-<<<<<<< HEAD
-      toast.success(`Resgate de R$ ${amount.toFixed(2)} realizado com sucesso!`);
-
-      // Send WhatsApp notification if consent is given
-      if (customer?.whatsapp_consent) {
-        try {
-          await sendWhatsAppNotification(customer.phone, 'redemption', {
-            amount: amount.toFixed(2),
-            store: selectedRedemptionStore.name
-          });
-        } catch (error) {
-          console.error('Error sending redemption notification:', error);
-        }
-      }
-=======
       toast.success(`Resgate de R$ ${amount.toFixed(2)} registrado! Aguarde a aprovação do atendente.`);
->>>>>>> 5b306f3 (atualização cashback)
     } catch (error) {
       console.error('Redemption error:', error);
       toast.error('Erro ao processar resgate');
@@ -579,10 +453,7 @@ function ClientDashboard() {
 
   const handleLogout = () => {
     setCustomer(null);
-<<<<<<< HEAD
-=======
     setLoginEmail('');
->>>>>>> 5b306f3 (atualização cashback)
     setPhone('');
     setPassword('');
     setName('');
@@ -678,6 +549,12 @@ function ClientDashboard() {
             </div>
             <h1 className="text-3xl font-bold text-gray-900 mb-2">Elite Açaí</h1>
             <p className="text-gray-600">Sistema de Cashback</p>
+            <div className="mt-4 p-4 bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl border border-purple-100">
+              <h2 className="text-lg font-bold text-purple-700 mb-1">Ganhe 5% de Cashback!</h2>
+              <p className="text-sm text-purple-600">
+                Compre hoje e ganhe 5% do valor de volta para suas próximas compras!
+              </p>
+            </div>
           </div>
 
           <div className="flex rounded-lg border border-purple-100 p-1 mb-6">
@@ -724,20 +601,6 @@ function ClientDashboard() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-<<<<<<< HEAD
-                Telefone *
-              </label>
-              <input
-                type="tel"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
-                className="input-field"
-                placeholder="11999999999"
-                maxLength={11}
-                required
-              />
-              <p className="text-xs text-gray-500 mt-1">Digite apenas números (11 dígitos)</p>
-=======
                 {isLogin ? 'E-mail *' : 'Telefone *'}
               </label>
               {isLogin ? (
@@ -765,18 +628,13 @@ function ClientDashboard() {
                   <p className="text-xs text-gray-500 mt-1">Digite apenas números (11 dígitos)</p>
                 </>
               )}
->>>>>>> 5b306f3 (atualização cashback)
             </div>
 
             {!isLogin && (
               <>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-<<<<<<< HEAD
-                    E-mail
-=======
                     E-mail *
->>>>>>> 5b306f3 (atualização cashback)
                   </label>
                   <input
                     type="email"
@@ -784,10 +642,7 @@ function ClientDashboard() {
                     onChange={(e) => setEmail(e.target.value)}
                     className="input-field"
                     placeholder="seu@email.com"
-<<<<<<< HEAD
-=======
                     required
->>>>>>> 5b306f3 (atualização cashback)
                   />
                 </div>
 
@@ -941,190 +796,10 @@ function ClientDashboard() {
                   {formatCurrency(nextExpiringAmount.amount)} expira em{' '}
                   {new Date(nextExpiringAmount.date).toLocaleDateString('pt-BR')}
                 </div>
-<<<<<<< HEAD
               )}
             </div>
           </div>
 
-          {/* Quick Actions */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="glass-card p-6">
-              <h3 className="card-header">
-                <ShoppingBag className="w-5 h-5 text-green-600" />
-                Registrar Compra
-              </h3>
-              
-              <form onSubmit={handlePurchase} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Valor da Compra
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    value={transactionAmount}
-                    onChange={(e) => setTransactionAmount(e.target.value)}
-                    className="input-field"
-                    placeholder="0,00"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Loja
-                  </label>
-                  <select
-                    value={selectedStore?.id || ''}
-                    onChange={(e) => {
-                      const store = ALL_STORE_LOCATIONS.find(s => s.id === e.target.value);
-                      setSelectedStore(store || null);
-                    }}
-                    className="input-field"
-                    required
-                  >
-                    <option value="">Selecione uma loja</option>
-                    {ALL_STORE_LOCATIONS.map(store => (
-                      <option key={store.id} value={store.id}>
-                        {store.name}
-                        {userLocation && (
-                          ` - ${formatDistance(userLocation, store)}`
-                        )}
-                      </option>
-                    ))}
-                  </select>
-                  {locationError && (
-                    <p className="text-xs text-amber-600 mt-1">
-                      <MapPin className="w-3 h-3 inline mr-1" />
-                      {locationError}
-                    </p>
-                  )}
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isSubmitting || !selectedStore || !transactionAmount}
-                  className="btn-primary w-full"
-                >
-                  {isSubmitting ? 'Processando...' : 'Registrar Compra'}
-                </button>
-              </form>
-
-              {transactionAmount && (
-                <div className="mt-3 p-3 bg-green-50 rounded-lg">
-                  <p className="text-sm text-green-700">
-                    <Sparkles className="w-4 h-4 inline mr-1" />
-                    Cashback: {formatCurrency(parseFloat(transactionAmount) * 0.05)}
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div className="glass-card p-6">
-              <h3 className="card-header">
-                <Gift className="w-5 h-5 text-purple-600" />
-                Resgatar Cashback
-              </h3>
-              
-              {!showRedemptionForm ? (
-                <div className="space-y-4">
-                  <div className="text-center">
-                    <div className="text-2xl font-bold text-purple-600 mb-1">
-                      {formatCurrency(availableBalance)}
-                    </div>
-                    <p className="text-sm text-gray-600">Disponível para resgate</p>
-                  </div>
-                  
-                  <button
-                    onClick={() => setShowRedemptionForm(true)}
-                    disabled={availableBalance < 5}
-                    className="btn-secondary w-full"
-                  >
-                    Resgatar Agora
-                  </button>
-                  
-                  {availableBalance < 5 && (
-                    <p className="text-xs text-gray-500 text-center">
-                      Valor mínimo: R$ 5,00
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <form onSubmit={handleRedemption} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Valor do Resgate
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="5"
-                      max={availableBalance}
-                      value={redemptionAmount}
-                      onChange={(e) => setRedemptionAmount(e.target.value)}
-                      className="input-field"
-                      placeholder="5,00"
-                      required
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Máximo: {formatCurrency(availableBalance)}
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Loja para Resgate
-                    </label>
-                    <select
-                      value={selectedRedemptionStore?.id || ''}
-                      onChange={(e) => {
-                        const store = ALL_STORE_LOCATIONS.find(s => s.id === e.target.value);
-                        setSelectedRedemptionStore(store || null);
-                      }}
-                      className="input-field"
-                      required
-                    >
-                      <option value="">Selecione uma loja</option>
-                      {ALL_STORE_LOCATIONS.map(store => (
-                        <option key={store.id} value={store.id}>
-                          {store.name}
-                          {userLocation && (
-                            ` - ${formatDistance(userLocation, store)}`
-                          )}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowRedemptionForm(false);
-                        setRedemptionAmount('');
-                      }}
-                      className="btn-secondary flex-1"
-                    >
-                      Cancelar
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={isSubmitting || !selectedRedemptionStore || !redemptionAmount}
-                      className="btn-primary flex-1"
-                    >
-                      {isSubmitting ? 'Processando...' : 'Resgatar'}
-                    </button>
-                  </div>
-                </form>
-=======
->>>>>>> 5b306f3 (atualização cashback)
-              )}
-            </div>
-          </div>
-
-<<<<<<< HEAD
-=======
           {/* Quick Actions */}
           <div className="grid grid-cols-2 gap-4">
             <div className="glass-card p-6">
@@ -1313,7 +988,6 @@ function ClientDashboard() {
             </div>
           </div>
 
->>>>>>> 5b306f3 (atualização cashback)
           {/* Transactions History */}
           <div className="glass-card p-8">
             <div className="flex items-center justify-between mb-6">
