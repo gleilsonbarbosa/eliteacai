@@ -1,27 +1,88 @@
 import { useState, useEffect } from 'react';
-import { Phone, Wallet, History, CreditCard, Gift, CheckCircle2, Clock, XCircle, ArrowRight, Sparkles, ShoppingBag, Receipt, ChevronDown, ChevronUp, User, Lock, LogOut, MapPin, Calendar, Mail, AlertCircle } from 'lucide-react';
+import { Phone, Wallet, History, ArrowRight, Sparkles, ShoppingBag, Receipt, ChevronDown, ChevronUp, User, Lock, LogOut, MapPin, Calendar, Mail, AlertCircle, LogIn, Tag, Trophy, CreditCard, Gift, CheckCircle2, Clock, XCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import type { Customer, Transaction } from '../../types';
 import { supabase } from '../../lib/supabase';
 import { sendWhatsAppNotification } from '../../lib/notifications';
-import { redeemCashback } from '../../utils/transactions';
 import toast from 'react-hot-toast';
 import { getCurrentPosition, isWithinStoreRange, getClosestStore, formatDistance } from '../../utils/geolocation';
+import { getAvailableBalance, getNextExpiringCashback } from '../../utils/transactions';
+import type { Customer, Transaction, StoreLocation } from '../../types';
+import { STORE_LOCATIONS, TEST_STORE } from '../../types';
+import PromotionsAlert from '../../components/PromotionsAlert';
+import CashbackAnimation from '../../components/CashbackAnimation';
+import ConfirmationModal from '../../components/ConfirmationModal';
 
-const CASHBACK_RATE = 0.05; // 5% cashback
+// Combine visible stores and test store for geolocation checks
+const ALL_STORE_LOCATIONS = [...STORE_LOCATIONS, TEST_STORE];
 
-export default function ClientDashboard() {
+const ITEMS_PER_PAGE = 10;
+
+function PromoMessage() {
+  const today = new Date().getDay(); // 0 = Sunday, 1 = Monday, etc.
+  
+  const getPromoMessage = () => {
+    switch (today) {
+      case 1: // Monday
+        return {
+          product: 'copo de 300g',
+          price: '9,99'
+        };
+      case 2: // Tuesday
+        return {
+          product: 'copo de 500g',
+          price: '15,99'
+        };
+      case 3: // Wednesday
+        return {
+          product: 'copo de 400g',
+          price: '12,99'
+        };
+      case 4: // Thursday
+        return {
+          product: 'quilo',
+          price: '37,99'
+        };
+      default:
+        return {
+          product: 'copo de 300g',
+          price: '9,99'
+        };
+    }
+  };
+
+  const promo = getPromoMessage();
+
+  return (
+    <div className="bg-purple-50 text-purple-700 p-4 rounded-xl text-center font-medium mt-6 border border-purple-100">
+      💥 Aproveite! Hoje tem {promo.product} SEM PESO por <span className="font-bold">R${promo.price}</span>! Só na Elite Açaí!
+    </div>
+  );
+}
+
+function ClientDashboard() {
   const [customer, setCustomer] = useState<Customer | null>(null);
-  const [phoneNumber, setPhoneNumber] = useState('');
+  const [email, setEmail] = useState(() => {
+    const savedData = localStorage.getItem('loginData');
+    return savedData ? JSON.parse(savedData).email : '';
+  });
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState('');
-  const [password, setPassword] = useState('');
+  const [password, setPassword] = useState(() => {
+    const savedData = localStorage.getItem('loginData');
+    return savedData ? JSON.parse(savedData).password : '';
+  });
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isLogin, setIsLogin] = useState(false);
+  const [rememberMe, setRememberMe] = useState(() => {
+    return localStorage.getItem('rememberMe') === 'true';
+  });
+  const [whatsAppConsent, setWhatsAppConsent] = useState(false);
   const [transactionAmount, setTransactionAmount] = useState('');
+  const [selectedStore, setSelectedStore] = useState<StoreLocation | null>(null);
   const [showRedemptionForm, setShowRedemptionForm] = useState(false);
   const [redemptionAmount, setRedemptionAmount] = useState('');
+  const [selectedRedemptionStore, setSelectedRedemptionStore] = useState<StoreLocation | null>(null);
   const [loading, setLoading] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [activeTab, setActiveTab] = useState<'purchases' | 'redemptions'>('purchases');
@@ -29,67 +90,32 @@ export default function ClientDashboard() {
   const [expandedTransactionId, setExpandedTransactionId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [nextExpiringAmount, setNextExpiringAmount] = useState<{ amount: number; date: Date } | null>(null);
+  const [isTopCustomer, setIsTopCustomer] = useState(false);
+  const [topCustomerRank, setTopCustomerRank] = useState<number | null>(null);
+  const [userLocation, setUserLocation] = useState<GeolocationPosition | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const [showCashbackAnimation, setShowCashbackAnimation] = useState(false);
+  const [lastCashbackAmount, setLastCashbackAmount] = useState(0);
+  const [showPurchaseConfirmation, setShowPurchaseConfirmation] = useState(false);
+  const [showRedemptionConfirmation, setShowRedemptionConfirmation] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
     if (customer) {
       loadTransactions();
       calculateAvailableBalance();
+      checkTopCustomerStatus();
+      checkLocationAndSetStore();
     }
   }, [customer?.id]);
 
-  const calculateAvailableBalance = async () => {
-    if (!customer?.id) return;
-
-    try {
-      const { data: balance, error } = await supabase
-        .rpc('get_available_balance', { p_customer_id: customer.id });
-
-      if (error) throw error;
-
-      setAvailableBalance(balance || 0);
-
-      // Update customer data
-      const { data: updatedCustomer, error: customerError } = await supabase
-        .from('customers')
-        .select('*')
-        .eq('id', customer.id)
-        .single();
-
-      if (customerError) throw customerError;
-      if (updatedCustomer) {
-        setCustomer(updatedCustomer);
-      }
-
-      // Find next expiring amount
-      const { data: expiringTransactions, error: expiringError } = await supabase
-        .from('transactions')
-        .select('cashback_amount, expires_at')
-        .eq('customer_id', customer.id)
-        .eq('type', 'purchase')
-        .eq('status', 'approved')
-        .gt('expires_at', new Date().toISOString())
-        .order('expires_at', { ascending: true })
-        .limit(1);
-
-      if (expiringError) throw expiringError;
-
-      if (expiringTransactions && expiringTransactions.length > 0) {
-        const nextExpiring = expiringTransactions[0];
-        setNextExpiringAmount({
-          amount: nextExpiring.cashback_amount,
-          date: new Date(nextExpiring.expires_at)
-        });
-      } else {
-        setNextExpiringAmount(null);
-      }
-    } catch (error) {
-      console.error('Error calculating balance:', error);
-      toast.error('Erro ao calcular saldo disponível');
-    }
-  };
+  useEffect(() => {
+    // Reset to first page when changing tabs
+    setCurrentPage(1);
+  }, [activeTab]);
 
   const loadTransactions = async () => {
-    if (!customer) return;
+    if (!customer?.id) return;
 
     try {
       const { data, error } = await supabase
@@ -100,809 +126,1009 @@ export default function ClientDashboard() {
 
       if (error) throw error;
       setTransactions(data || []);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error loading transactions:', error);
       toast.error('Erro ao carregar transações');
     }
   };
 
-  const handleRedeemCashback = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!customer) return;
+  const calculateAvailableBalance = async () => {
+    if (!customer?.id) return;
 
-    const amount = parseFloat(redemptionAmount);
-    if (isNaN(amount) || amount <= 0) {
-      toast.error('Por favor, insira um valor válido para resgate');
+    try {
+      const balance = await getAvailableBalance(customer.id);
+      setAvailableBalance(balance);
+
+      const nextExpiring = await getNextExpiringCashback(customer.id);
+      setNextExpiringAmount(nextExpiring);
+    } catch (error) {
+      console.error('Error calculating balance:', error);
+    }
+  };
+
+  const checkTopCustomerStatus = async () => {
+    if (!customer?.id) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('transactions')
+        .select('customer_id, amount')
+        .eq('type', 'purchase')
+        .eq('status', 'approved');
+
+      if (error) throw error;
+
+      // Calculate total purchases per customer
+      const customerTotals = data.reduce((acc, transaction) => {
+        const customerId = transaction.customer_id;
+        if (!acc[customerId]) {
+          acc[customerId] = 0;
+        }
+        acc[customerId] += parseFloat(transaction.amount);
+        return acc;
+      }, {} as Record<string, number>);
+
+      // Sort customers by total purchases
+      const sortedCustomers = Object.entries(customerTotals)
+        .sort(([, a], [, b]) => b - a)
+        .map(([customerId]) => customerId);
+
+      const customerRank = sortedCustomers.indexOf(customer.id) + 1;
+      const isTop = customerRank <= 10 && customerRank > 0;
+
+      setIsTopCustomer(isTop);
+      setTopCustomerRank(isTop ? customerRank : null);
+    } catch (error) {
+      console.error('Error checking top customer status:', error);
+    }
+  };
+
+  const checkLocationAndSetStore = async () => {
+    try {
+      const position = await getCurrentPosition();
+      setUserLocation(position);
+      setLocationError(null);
+
+      const closestStore = getClosestStore(position, ALL_STORE_LOCATIONS);
+      if (closestStore && isWithinStoreRange(position, closestStore)) {
+        setSelectedStore(closestStore);
+        setSelectedRedemptionStore(closestStore);
+      }
+    } catch (error) {
+      setLocationError('Não foi possível obter sua localização');
+      console.error('Location error:', error);
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      const { data, error } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('phone', phone)
+        .single();
+
+      if (error || !data) {
+        toast.error('Telefone não encontrado');
+        return;
+      }
+
+      // Verify password
+      const { data: authData, error: authError } = await supabase.rpc('verify_customer_password', {
+        customer_phone: phone,
+        password_input: password
+      });
+
+      if (authError || !authData) {
+        toast.error('Senha incorreta');
+        return;
+      }
+
+      // Update last login
+      await supabase
+        .from('customers')
+        .update({ last_login: new Date().toISOString() })
+        .eq('id', data.id);
+
+      setCustomer(data);
+      
+      if (rememberMe) {
+        localStorage.setItem('loginData', JSON.stringify({ email, password }));
+        localStorage.setItem('rememberMe', 'true');
+      } else {
+        localStorage.removeItem('loginData');
+        localStorage.removeItem('rememberMe');
+      }
+
+      toast.success('Login realizado com sucesso!');
+    } catch (error) {
+      console.error('Login error:', error);
+      toast.error('Erro ao fazer login');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (password !== confirmPassword) {
+      toast.error('As senhas não coincidem');
       return;
     }
 
-    if (amount > availableBalance) {
-      toast.error(`Valor máximo para resgate é R$ ${availableBalance.toFixed(2)}`);
+    if (password.length < 6) {
+      toast.error('A senha deve ter pelo menos 6 caracteres');
       return;
     }
 
     setLoading(true);
+
     try {
-      const { redemption, error } = await redeemCashback(customer.id, amount);
+      const { data, error } = await supabase
+        .from('customers')
+        .insert({
+          name,
+          phone,
+          email: email || null,
+          date_of_birth: dateOfBirth || null,
+          password_hash: password,
+          whatsapp_consent: whatsAppConsent
+        })
+        .select()
+        .single();
 
       if (error) {
-        toast.error(error);
+        if (error.code === '23505') {
+          toast.error('Este telefone já está cadastrado');
+        } else {
+          toast.error('Erro ao criar conta');
+        }
         return;
       }
 
-      // Refresh data
-      await Promise.all([
-        loadTransactions(),
-        calculateAvailableBalance()
-      ]);
+      setCustomer(data);
+      toast.success('Conta criada com sucesso!');
 
-      toast.success(`Resgate de R$ ${amount.toFixed(2)} realizado com sucesso!`);
-      setShowRedemptionForm(false);
-      setRedemptionAmount('');
-    } catch (error: any) {
-      console.error('Error:', error);
-      toast.error(error.message || 'Erro ao resgatar cashback');
+      // Send welcome notification if WhatsApp consent is given
+      if (whatsAppConsent) {
+        try {
+          await sendWhatsAppNotification(phone, 'welcome', { name });
+        } catch (error) {
+          console.error('Error sending welcome notification:', error);
+        }
+      }
+    } catch (error) {
+      console.error('Registration error:', error);
+      toast.error('Erro ao criar conta');
     } finally {
       setLoading(false);
     }
   };
 
-  const formatExpirationDate = (date: Date) => {
-    const now = new Date();
-    const diffTime = date.getTime() - now.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    
-    if (diffDays === 1) {
-      return 'Expira amanhã';
-    } else if (diffDays > 1) {
-      return `Expira em ${diffDays} dias`;
-    } else {
-      return 'Expira hoje';
-    }
-  };
-
-  const handlePhoneNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let value = e.target.value.replace(/\D/g, '');
-    
-    if (value.length > 11) {
-      value = value.slice(0, 11);
-    }
-    
-    let formattedValue = '';
-    if (value.length > 0) {
-      formattedValue = `(${value.slice(0, 2)}`;
-      if (value.length > 2) {
-        formattedValue += `) ${value.slice(2, 7)}`;
-        if (value.length > 7) {
-          formattedValue += `-${value.slice(7, 11)}`;
-        }
-      }
-    }
-    
-    setPhoneNumber(formattedValue);
-  };
-
-  const handleCustomerSubmit = async (e: React.FormEvent) => {
+  const handlePurchase = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
+    if (!selectedStore || !transactionAmount) return;
+
+    setIsSubmitting(true);
 
     try {
-      const cleanPhone = phoneNumber.replace(/\D/g, '');
+      const amount = parseFloat(transactionAmount);
       
-      if (cleanPhone.length !== 11) {
-        toast.error('Por favor, insira um número de telefone válido com DDD');
-        return;
-      }
+      const { data, error } = await supabase
+        .from('transactions')
+        .insert({
+          customer_id: customer?.id,
+          amount,
+          cashback_amount: 0, // Will be calculated by trigger
+          type: 'purchase',
+          status: 'approved',
+          store_id: selectedStore.id,
+          location: userLocation ? {
+            latitude: userLocation.coords.latitude,
+            longitude: userLocation.coords.longitude
+          } : null
+        })
+        .select()
+        .single();
 
-      if (isLogin) {
-        // Verify the password using RPC function
-        const { data: customerId, error: verifyError } = await supabase
-          .rpc('verify_customer_password', {
-            p_phone: cleanPhone,
-            p_password: password
+      if (error) throw error;
+
+      // Calculate cashback (5% of purchase amount)
+      const cashbackAmount = amount * 0.05;
+      setLastCashbackAmount(cashbackAmount);
+      setShowCashbackAnimation(true);
+
+      setTransactionAmount('');
+      await loadTransactions();
+      await calculateAvailableBalance();
+      
+      toast.success(`Compra registrada! Você ganhou R$ ${cashbackAmount.toFixed(2)} de cashback!`);
+
+      // Send WhatsApp notification if consent is given
+      if (customer?.whatsapp_consent) {
+        try {
+          await sendWhatsAppNotification(customer.phone, 'purchase', {
+            amount: amount.toFixed(2),
+            cashback: cashbackAmount.toFixed(2),
+            store: selectedStore.name
           });
-
-        if (verifyError) {
-          console.error('Error verifying password:', verifyError);
-          toast.error('Erro ao verificar senha');
-          return;
+        } catch (error) {
+          console.error('Error sending purchase notification:', error);
         }
-
-        if (!customerId) {
-          toast.error('Telefone ou senha incorretos');
-          return;
-        }
-
-        // Fetch customer data
-        const { data: customerData, error: customerError } = await supabase
-          .from('customers')
-          .select('*')
-          .eq('id', customerId)
-          .single();
-
-        if (customerError || !customerData) {
-          throw new Error('Erro ao carregar dados do cliente');
-        }
-
-        setCustomer(customerData);
-        toast.success('Login realizado com sucesso!');
-      } else {
-        // Registration flow
-        // Check if phone number exists
-        const { data: existingCustomer } = await supabase
-          .from('customers')
-          .select('id')
-          .eq('phone', cleanPhone)
-          .single();
-
-        if (existingCustomer) {
-          toast.error('Este número já está cadastrado', {
-            icon: '📱',
-            duration: 5000,
-          });
-          return;
-        }
-
-        if (!email.match(/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/)) {
-          toast.error('Por favor, insira um email válido');
-          return;
-        }
-
-        const { data: existingEmail } = await supabase
-          .from('customers')
-          .select('id')
-          .eq('email', email.toLowerCase())
-          .maybeSingle();
-
-        if (existingEmail) {
-          toast.error('Este email já está cadastrado');
-          return;
-        }
-
-        if (!dateOfBirth) {
-          toast.error('Por favor, insira sua data de nascimento');
-          return;
-        }
-
-        if (!name.trim()) {
-          throw new Error('Por favor, insira seu nome');
-        }
-
-        if (!password || password.length < 6) {
-          throw new Error('A senha deve ter pelo menos 6 caracteres');
-        }
-
-        if (password !== confirmPassword) {
-          throw new Error('As senhas não coincidem');
-        }
-
-        // Create new customer
-        const { data: newCustomer, error: createError } = await supabase
-          .from('customers')
-          .insert({
-            name: name.trim(),
-            phone: cleanPhone,
-            email: email.toLowerCase(),
-            date_of_birth: dateOfBirth,
-            password_hash: password,
-            balance: 0
-          })
-          .select()
-          .single();
-
-        if (createError) throw createError;
-
-        // Send welcome notification
-        await sendWhatsAppNotification({
-          type: 'welcome',
-          customerId: newCustomer.id
-        });
-
-        setCustomer(newCustomer);
-        toast.success('Cadastro realizado com sucesso!');
       }
-
-      // Clear form
-      setPhoneNumber('');
-      setName('');
-      setEmail('');
-      setDateOfBirth('');
-      setPassword('');
-      setConfirmPassword('');
-    } catch (error: any) {
-      console.error('Error:', error);
-      toast.error(error.message || 'Erro ao processar solicitação');
+    } catch (error) {
+      console.error('Purchase error:', error);
+      toast.error('Erro ao registrar compra');
     } finally {
-      setLoading(false);
+      setIsSubmitting(false);
     }
   };
 
-  const addTransaction = async (e: React.FormEvent) => {
+  const handleRedemption = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customer) return;
+    if (!selectedRedemptionStore || !redemptionAmount) return;
 
-    const amount = parseFloat(transactionAmount);
-    if (isNaN(amount) || amount <= 0) {
-      toast.error('Por favor, insira um valor válido');
+    const amount = parseFloat(redemptionAmount);
+    
+    if (amount > availableBalance) {
+      toast.error('Saldo insuficiente para este resgate');
       return;
     }
 
-    if (isSubmitting) {
+    if (amount < 5) {
+      toast.error('O valor mínimo para resgate é R$ 5,00');
       return;
     }
 
     setIsSubmitting(true);
-    setLoading(true);
 
     try {
-      // Check Supabase connection first
-      const { error: healthCheckError } = await supabase.from('transactions').select('id').limit(1);
-      if (healthCheckError) {
-        console.error('Supabase connection error:', healthCheckError);
-        throw new Error('Erro de conexão com o servidor. Por favor, verifique sua conexão com a internet.');
-      }
-
-      let position;
-      try {
-        position = await getCurrentPosition();
-      } catch (geoError: any) {
-        throw new Error(geoError.message || 'Erro ao obter localização');
-      }
-
-      const { latitude, longitude } = position.coords;
-
-      // Check if within range of any store
-      if (!isWithinStoreRange(latitude, longitude)) {
-        const closestStore = getClosestStore(latitude, longitude);
-        if (closestStore) {
-          const distanceText = formatDistance(closestStore.distance || 0);
-          toast.error(
-            <div className="flex flex-col gap-2">
-              <p>Você precisa estar em uma loja Elite Açaí para registrar compras.</p>
-              <p className="flex items-center gap-2 text-sm">
-                <MapPin className="w-4 h-4" />
-                Loja mais próxima: {closestStore.name} ({distanceText})
-              </p>
-            </div>
-          );
-        } else {
-          toast.error('Você precisa estar em uma loja Elite Açaí para registrar compras.');
-        }
-        return;
-      }
-
-      const cashbackAmount = Number((amount * CASHBACK_RATE).toFixed(2));
-
-      // Add a small delay to prevent duplicate submissions
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Calculate expiration date (end of next month)
-      const expirationDate = new Date();
-      expirationDate.setMonth(expirationDate.getMonth() + 2, 0); // Last day of next month
-      expirationDate.setHours(23, 59, 59, 999);
-
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('transactions')
         .insert({
-          customer_id: customer.id,
+          customer_id: customer?.id,
           amount,
-          cashback_amount: cashbackAmount,
-          type: 'purchase',
-          status: 'pending',
-          location: {
-            latitude,
-            longitude
-          },
-          expires_at: expirationDate.toISOString()
-        });
+          cashback_amount: 0,
+          type: 'redemption',
+          status: 'approved',
+          store_id: selectedRedemptionStore.id,
+          location: userLocation ? {
+            latitude: userLocation.coords.latitude,
+            longitude: userLocation.coords.longitude
+          } : null
+        })
+        .select()
+        .single();
 
-      if (error) {
-        console.error('Transaction insert error:', error);
-        if (error.code === 'PGRST301') {
-          throw new Error('Sessão expirada. Por favor, faça login novamente.');
-        } else if (error.code === '23503') {
-          throw new Error('Erro de validação. Por favor, tente novamente.');
-        } else if (error.code === '23505') {
-          throw new Error('Transação duplicada. Por favor, aguarde alguns minutos antes de tentar novamente.');
-        } else {
-          throw new Error('Erro ao registrar transação. Por favor, tente novamente.');
+      if (error) throw error;
+
+      setRedemptionAmount('');
+      setShowRedemptionForm(false);
+      await loadTransactions();
+      await calculateAvailableBalance();
+      
+      toast.success(`Resgate de R$ ${amount.toFixed(2)} realizado com sucesso!`);
+
+      // Send WhatsApp notification if consent is given
+      if (customer?.whatsapp_consent) {
+        try {
+          await sendWhatsAppNotification(customer.phone, 'redemption', {
+            amount: amount.toFixed(2),
+            store: selectedRedemptionStore.name
+          });
+        } catch (error) {
+          console.error('Error sending redemption notification:', error);
         }
       }
-
-      setTransactionAmount('');
-      await Promise.all([
-        loadTransactions(),
-        calculateAvailableBalance()
-      ]);
-
-      toast.success(
-        <div className="flex flex-col gap-2">
-          <p>Compra registrada com sucesso! Aguarde a aprovação.</p>
-          <p className="text-sm text-green-600">Você está em uma loja Elite Açaí autorizada.</p>
-        </div>
-      );
-    } catch (error: any) {
-      console.error('Transaction error:', error);
-      toast.error(error.message || 'Erro ao registrar compra. Por favor, tente novamente.');
+    } catch (error) {
+      console.error('Redemption error:', error);
+      toast.error('Erro ao processar resgate');
     } finally {
-      setLoading(false);
       setIsSubmitting(false);
     }
   };
 
   const handleLogout = () => {
     setCustomer(null);
+    setPhone('');
+    setPassword('');
+    setName('');
+    setEmail('');
+    setDateOfBirth('');
+    setConfirmPassword('');
+    setWhatsAppConsent(false);
     setTransactions([]);
     setAvailableBalance(0);
-    setActiveTab('purchases');
+    setIsLogin(false);
+    
+    if (!rememberMe) {
+      localStorage.removeItem('loginData');
+    }
+    
     toast.success('Logout realizado com sucesso!');
   };
 
-  const toggleTransactionDetails = (transactionId: string) => {
-    setExpandedTransactionId(expandedTransactionId === transactionId ? null : transactionId);
+  const filteredTransactions = transactions
+    .filter(t => activeTab === 'purchases' ? t.type === 'purchase' : t.type === 'redemption');
+
+  const totalPages = Math.ceil(filteredTransactions.length / ITEMS_PER_PAGE);
+  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+  const endIndex = startIndex + ITEMS_PER_PAGE;
+  const currentTransactions = filteredTransactions.slice(startIndex, endIndex);
+
+  const handlePreviousPage = () => {
+    if (currentPage > 1) {
+      setCurrentPage(currentPage - 1);
+    }
   };
 
-  const formatDateTime = (dateString: string) => {
+  const handleNextPage = () => {
+    if (currentPage < totalPages) {
+      setCurrentPage(currentPage + 1);
+    }
+  };
+
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL'
+    }).format(amount);
+  };
+
+  const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('pt-BR', {
       day: '2-digit',
-      month: 'long',
+      month: '2-digit',
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
     });
   };
 
-  if (!customer) {
-    return (
-      <div className="min-h-[80vh] flex items-center justify-center p-4">
-        <div className="max-w-md w-full">
-          <div className="glass-card p-8">
-            <div className="text-center mb-8">
-              <div className="w-20 h-20 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-6">
-                <Sparkles className="w-10 h-10 text-purple-600" />
-              </div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-3">
-                Ganhe 5% de Cashback!
-              </h1>
-              <p className="text-gray-600 text-lg">
-                Compre hoje e ganhe 5% do valor de volta para suas próximas compras!
-              </p>
-            </div>
+  const getTransactionIcon = (type: string, status: string) => {
+    if (type === 'purchase') {
+      return status === 'approved' ? 
+        <ShoppingBag className="w-5 h-5 text-green-600" /> : 
+        <Clock className="w-5 h-5 text-yellow-600" />;
+    } else {
+      return status === 'approved' ? 
+        <Gift className="w-5 h-5 text-purple-600" /> : 
+        <Clock className="w-5 h-5 text-yellow-600" />;
+    }
+  };
 
-            <div className="flex justify-center gap-4 mb-8">
-              <button
-                onClick={() => setIsLogin(false)}
-                className={`px-4 py-2 rounded-lg transition-all ${
-                  !isLogin
-                    ? 'bg-purple-100 text-purple-700 font-medium'
-                    : 'text-gray-600 hover:text-purple-600'
-                }`}
-              >
-                Cadastrar
-              </button>
-              <button
-                onClick={() => setIsLogin(true)}
-                className={`px-4 py-2 rounded-lg transition-all ${
-                  isLogin
-                    ? 'bg-purple-100 text-purple-700 font-medium'
-                    : 'text-gray-600 hover:text-purple-600'
-                }`}
-              >
-                Entrar
-              </button>
-            </div>
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'approved': return 'text-green-600 bg-green-50';
+      case 'pending': return 'text-yellow-600 bg-yellow-50';
+      case 'rejected': return 'text-red-600 bg-red-50';
+      default: return 'text-gray-600 bg-gray-50';
+    }
+  };
 
-            <form onSubmit={handleCustomerSubmit} className="space-y-6">
-              {!isLogin && (
-                <>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Seu nome completo
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        className="input-field text-lg pl-11"
-                        placeholder="João da Silva"
-                        required={!isLogin}
-                      />
-                      <User className="w-5 h-5 text-gray-400 absolute left-4 top-1/2 -translate-y-1/2" />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Seu email
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        className="input-field text-lg pl-11"
-                        placeholder="exemplo@email.com"
-                        required={!isLogin}
-                      />
-                      <Mail className="w-5 h-5 text-gray-400 absolute left-4 top-1/2 -translate-y-1/2" />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Data de Nascimento
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="date"
-                        value={dateOfBirth}
-                        onChange={(e) => setDateOfBirth(e.target.value)}
-                        className="input-field text-lg pl-11"
-                        required={!isLogin}
-                      />
-                      <Calendar className="w-5 h-5 text-gray-400 absolute left-4 top-1/2 -translate-y-1/2" />
-                    </div>
-                  </div>
-                </>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Seu número do WhatsApp
-                </label>
-                <div className="relative">
-                  <input
-                    type="tel"
-                    value={phoneNumber}
-                    onChange={handlePhoneNumberChange}
-                    placeholder="(99) 99999-9999"
-                    className="input-field text-lg pl-11"
-                    maxLength={15}
-                    required
-                  />
-                  <Phone className="w-5 h-5 text-gray-400 absolute left-4 top-1/2 -translate-y-1/2" />
-                </div>
-                <p className="mt-2 text-sm text-gray-500">
-                  Digite seu número com DDD, exemplo: (85) XXXXX-XXXX
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Senha
-                </label>
-                <div className="relative">
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="input-field text-lg pl-11"
-                    placeholder="••••••"
-                    required
-                    minLength={6}
-                  />
-                  <Lock className="w-5 h-5 text-gray-400 absolute left-4 top-1/2 -translate-y-1/2" />
-                </div>
-                {!isLogin && (
-                  <p className="mt-2 text-sm text-gray-500">
-                    Mínimo de 6 caracteres
-                  </p>
-                )}
-              </div>
-
-              {!isLogin && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Confirme sua senha
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      className="input-field text-lg pl-11"
-                      placeholder="••••••"
-                      required={!isLogin}
-                    />
-                    <Lock className="w-5 h-5 text-gray-400 absolute left-4 top-1/2 -translate-y-1/2" />
-                  </div>
-                </div>
-              )}
-
-              {isLogin && (
-                <div className="text-right">
-                  <Link
-                    to="/reset-password"
-                    className="text-sm text-purple-600 hover:text-purple-700 transition-colors"
-                  >
-                    Esqueceu sua senha?
-                  </Link>
-                </div>
-              )}
-
-              <button
-                type="submit"
-                className="btn-primary w-full text-lg"
-                disabled={loading}
-              >
-                {loading ? 'Processando...' : isLogin ? 'Entrar' : 'Cadastrar'}
-              </button>
-            </form>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case 'approved': return 'Aprovado';
+      case 'pending': return 'Pendente';
+      case 'rejected': return 'Rejeitado';
+      default: return status;
+    }
+  };
 
   return (
     <div className="max-w-lg mx-auto space-y-6">
-      <div className="glass-card p-8">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <div className="flex items-center justify-between gap-4 mb-2">
-              <h2 className="text-2xl font-bold">Olá, {customer.name}!</h2>
-              <button
-                onClick={handleLogout}
-                className="btn-secondary py-2 px-4 flex items-center gap-2 text-sm"
-              >
-                <LogOut className="w-4 h-4" />
-                Sair
-              </button>
+      {!customer ? (
+        <div className="glass-card p-8">
+          <div className="text-center mb-8">
+            <div className="w-20 h-20 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Sparkles className="w-10 h-10 text-white" />
             </div>
-            <p className="text-gray-600 flex items-center gap-2">
-              <Phone className="w-4 h-4" />
-              {customer.phone}
-            </p>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Elite Açaí</h1>
+            <p className="text-gray-600">Sistema de Cashback</p>
           </div>
-          <div className="text-right">
-            <div className="text-sm text-gray-600 mb-1">Seu saldo disponível</div>
-            <div className="text-3xl font-bold text-purple-600">
-              R$ {availableBalance.toFixed(2)}
-            </div>
-            {nextExpiringAmount && (
-              <div className="mt-2 text-sm flex items-center gap-1 text-orange-600">
-                <AlertCircle className="w-4 h-4" />
-                <span>
-                  R$ {nextExpiringAmount.amount.toFixed(2)} - {formatExpirationDate(nextExpiringAmount.date)}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
 
-        <div className="space-y-6">
-          <div className="border-t border-b border-purple-100 -mx-8 px-8 py-6">
-            <h3 className="font-medium text-gray-900 mb-4">Registrar Nova Compra</h3>
-            <form onSubmit={addTransaction} className="space-y-4">
+          <div className="flex rounded-lg border border-purple-100 p-1 mb-6">
+            <button
+              onClick={() => setIsLogin(true)}
+              className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all ${
+                isLogin
+                  ? 'bg-purple-100 text-purple-700'
+                  : 'text-gray-600 hover:text-purple-600'
+              }`}
+            >
+              <LogIn className="w-4 h-4 inline mr-2" />
+              Entrar
+            </button>
+            <button
+              onClick={() => setIsLogin(false)}
+              className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all ${
+                !isLogin
+                  ? 'bg-purple-100 text-purple-700'
+                  : 'text-gray-600 hover:text-purple-600'
+              }`}
+            >
+              <User className="w-4 h-4 inline mr-2" />
+              Cadastrar
+            </button>
+          </div>
+
+          <form onSubmit={isLogin ? handleLogin : handleRegister} className="space-y-4">
+            {!isLogin && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Valor da Compra
+                  Nome Completo *
                 </label>
                 <input
-                  type="number"
-                  step="0.01"
-                  value={transactionAmount}
-                  onChange={e => setTransactionAmount(e.target.value)}
-                  className="input-field text-lg"
-                  placeholder="0,00"
-                  required
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="input-field"
+                  placeholder="Seu nome completo"
+                  required={!isLogin}
                 />
-                {transactionAmount && parseFloat(transactionAmount) > 0 && (
-                  <p className="mt-2 text-sm text-purple-600 font-medium flex items-center gap-1">
-                    <ArrowRight className="w-4 h-4" />
-                    Você receberá R$ {(parseFloat(transactionAmount) * CASHBACK_RATE).toFixed(2)} em cashback
-                  </p>
-                )}
               </div>
+            )}
 
-              <button
-                type="submit"
-                className="btn-primary w-full text-lg flex items-center justify-center gap-2"
-                disabled={loading || isSubmitting}
-              >
-                <ShoppingBag className="w-5 h-5" />
-                {loading ? 'Processando...' : 'Registrar Compra'}
-              </button>
-            </form>
-          </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Telefone *
+              </label>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
+                className="input-field"
+                placeholder="11999999999"
+                maxLength={11}
+                required
+              />
+              <p className="text-xs text-gray-500 mt-1">Digite apenas números (11 dígitos)</p>
+            </div>
 
-          {availableBalance > 0 && (
-            <div className="text-center">
-              {showRedemptionForm ? (
-                <div className="glass-card p-6 bg-purple-50">
-                  <h3 className="font-medium text-gray-900 mb-4 flex items-center justify-center gap-2">
-                    <Gift className="w-5 h-5 text-purple-600" />
-                    Resgatar Cashback
-                  </h3>
-                  <form onSubmit={handleRedeemCashback} className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Valor para Resgate
-                      </label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0.01"
-                        max={availableBalance}
-                        value={redemptionAmount}
-                        onChange={e => setRedemptionAmount(e.target.value)}
-                        className="input-field text-lg"
-                        placeholder="0,00"
-                        required
-                      />
-                      <p className="mt-2 text-sm text-gray-500">
-                        Saldo disponível: R$ {availableBalance.toFixed(2)}
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        type="submit"
-                        className="btn-primary flex-1 text-lg flex items-center justify-center gap-2"
-                        disabled={loading}
-                      >
-                        <Gift className="w-5 h-5" />
-                        {loading ? 'Processando...' : 'Confirmar Resgate'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowRedemptionForm(false);
-                          setRedemptionAmount('');
-                        }}
-                        className="btn-secondary flex-1 text-lg"
-                        disabled={loading}
-                      >
-                        Cancelar
-                      </button>
-                    </div>
-                  </form>
+            {!isLogin && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    E-mail
+                  </label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="input-field"
+                    placeholder="seu@email.com"
+                  />
                 </div>
-              ) : (
-                <button
-                  onClick={() => setShowRedemptionForm(true)}
-                  type="button"
-                  className="btn-secondary text-lg inline-flex items-center gap-2"
-                  disabled={loading}
-                >
-                  <Gift className="w-5 h-5" />
-                  Resgatar Cashback
-                </button>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Data de Nascimento
+                  </label>
+                  <input
+                    type="date"
+                    value={dateOfBirth}
+                    onChange={(e) => setDateOfBirth(e.target.value)}
+                    className="input-field"
+                  />
+                </div>
+              </>
+            )}
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Senha *
+              </label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="input-field"
+                placeholder="Sua senha"
+                required
+                minLength={6}
+              />
+              {!isLogin && (
+                <p className="text-xs text-gray-500 mt-1">Mínimo 6 caracteres</p>
               )}
             </div>
+
+            {!isLogin && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Confirmar Senha *
+                </label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="input-field"
+                  placeholder="Confirme sua senha"
+                  required
+                  minLength={6}
+                />
+              </div>
+            )}
+
+            {isLogin && (
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="rememberMe"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                />
+                <label htmlFor="rememberMe" className="ml-2 text-sm text-gray-600">
+                  Lembrar dados de login
+                </label>
+              </div>
+            )}
+
+            {!isLogin && (
+              <div className="flex items-start">
+                <input
+                  type="checkbox"
+                  id="whatsappConsent"
+                  checked={whatsAppConsent}
+                  onChange={(e) => setWhatsAppConsent(e.target.checked)}
+                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500 mt-1"
+                />
+                <label htmlFor="whatsappConsent" className="ml-2 text-sm text-gray-600">
+                  Aceito receber notificações via WhatsApp sobre minhas transações e promoções
+                </label>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn-primary w-full"
+            >
+              {loading ? 'Processando...' : (isLogin ? 'Entrar' : 'Criar Conta')}
+            </button>
+          </form>
+
+          {isLogin && (
+            <div className="mt-4 text-center">
+              <Link 
+                to="/password-reset" 
+                className="text-sm text-purple-600 hover:text-purple-700"
+              >
+                Esqueci minha senha
+              </Link>
+            </div>
           )}
-        </div>
-      </div>
 
-      <div className="glass-card p-8">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="card-header !mb-0">
-            <History className="w-6 h-6 text-purple-600" />
-            Minhas Transações
-          </h2>
-          <div className="flex rounded-lg border border-purple-100 p-1">
-            <button
-              onClick={() => setActiveTab('purchases')}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                activeTab === 'purchases'
-                  ? 'bg-purple-100 text-purple-700'
-                  : 'text-gray-600 hover:text-purple-600'
-              }`}
-            >
-              Compras
-            </button>
-            <button
-              onClick={() => setActiveTab('redemptions')}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                activeTab === 'redemptions'
-                  ? 'bg-purple-100 text-purple-700'
-                  : 'text-gray-600 hover:text-purple-600'
-              }`}
-            >
-              Resgates
-            </button>
+          <PromoMessage />
+        </div>
+      ) : (
+        <>
+          <PromotionsAlert />
+          
+          {/* Welcome Header */}
+          <div className="glass-card p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
+                  <User className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">
+                    Olá, {customer.name || 'Cliente'}! 👋
+                  </h2>
+                  <p className="text-gray-600 text-sm">
+                    {isTopCustomer && topCustomerRank && (
+                      <span className="inline-flex items-center gap-1 text-yellow-600 font-medium">
+                        <Trophy className="w-4 h-4" />
+                        Top {topCustomerRank} Cliente
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="p-2 text-gray-400 hover:text-gray-600 transition-colors"
+                title="Sair"
+              >
+                <LogOut className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Balance Card */}
+            <div className="bg-gradient-to-r from-purple-500 to-pink-500 rounded-xl p-6 text-white">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-purple-100">Saldo Disponível</span>
+                <Wallet className="w-5 h-5 text-purple-100" />
+              </div>
+              <div className="text-3xl font-bold mb-1">
+                {formatCurrency(availableBalance)}
+              </div>
+              {nextExpiringAmount && (
+                <div className="text-purple-100 text-sm">
+                  <AlertCircle className="w-4 h-4 inline mr-1" />
+                  {formatCurrency(nextExpiringAmount.amount)} expira em{' '}
+                  {new Date(nextExpiringAmount.date).toLocaleDateString('pt-BR')}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
 
-        <div className="space-y-4">
-          {transactions
-            .filter(t => activeTab === 'purchases' ? t.type === 'purchase' : t.type === 'redemption')
-            .map(transaction => (
-              <div key={transaction.id} className="transaction-item">
-                <button 
-                  onClick={() => toggleTransactionDetails(transaction.id)}
-                  className="w-full text-left"
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-medium flex items-center gap-2">
-                        {transaction.type === 'purchase' ? (
-                          <CreditCard className="w-4 h-4 text-purple-600" />
-                        ) : (
-                          <Gift className="w-4 h-4 text-purple-600" />
+          {/* Quick Actions */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="glass-card p-6">
+              <h3 className="card-header">
+                <ShoppingBag className="w-5 h-5 text-green-600" />
+                Registrar Compra
+              </h3>
+              
+              <form onSubmit={handlePurchase} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Valor da Compra
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={transactionAmount}
+                    onChange={(e) => setTransactionAmount(e.target.value)}
+                    className="input-field"
+                    placeholder="0,00"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Loja
+                  </label>
+                  <select
+                    value={selectedStore?.id || ''}
+                    onChange={(e) => {
+                      const store = ALL_STORE_LOCATIONS.find(s => s.id === e.target.value);
+                      setSelectedStore(store || null);
+                    }}
+                    className="input-field"
+                    required
+                  >
+                    <option value="">Selecione uma loja</option>
+                    {ALL_STORE_LOCATIONS.map(store => (
+                      <option key={store.id} value={store.id}>
+                        {store.name}
+                        {userLocation && (
+                          ` - ${formatDistance(userLocation, store)}`
                         )}
-                        {transaction.type === 'purchase' ? 'Compra'  : 'Resgate'}
-                      </div>
-                      <div className="text-sm text-gray-600">
-                        {formatDateTime(transaction.created_at)}
+                      </option>
+                    ))}
+                  </select>
+                  {locationError && (
+                    <p className="text-xs text-amber-600 mt-1">
+                      <MapPin className="w-3 h-3 inline mr-1" />
+                      {locationError}
+                    </p>
+                  )}
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isSubmitting || !selectedStore || !transactionAmount}
+                  className="btn-primary w-full"
+                >
+                  {isSubmitting ? 'Processando...' : 'Registrar Compra'}
+                </button>
+              </form>
+
+              {transactionAmount && (
+                <div className="mt-3 p-3 bg-green-50 rounded-lg">
+                  <p className="text-sm text-green-700">
+                    <Sparkles className="w-4 h-4 inline mr-1" />
+                    Cashback: {formatCurrency(parseFloat(transactionAmount) * 0.05)}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="glass-card p-6">
+              <h3 className="card-header">
+                <Gift className="w-5 h-5 text-purple-600" />
+                Resgatar Cashback
+              </h3>
+              
+              {!showRedemptionForm ? (
+                <div className="space-y-4">
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-purple-600 mb-1">
+                      {formatCurrency(availableBalance)}
+                    </div>
+                    <p className="text-sm text-gray-600">Disponível para resgate</p>
+                  </div>
+                  
+                  <button
+                    onClick={() => setShowRedemptionForm(true)}
+                    disabled={availableBalance < 5}
+                    className="btn-secondary w-full"
+                  >
+                    Resgatar Agora
+                  </button>
+                  
+                  {availableBalance < 5 && (
+                    <p className="text-xs text-gray-500 text-center">
+                      Valor mínimo: R$ 5,00
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <form onSubmit={handleRedemption} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Valor do Resgate
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="5"
+                      max={availableBalance}
+                      value={redemptionAmount}
+                      onChange={(e) => setRedemptionAmount(e.target.value)}
+                      className="input-field"
+                      placeholder="5,00"
+                      required
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Máximo: {formatCurrency(availableBalance)}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Loja para Resgate
+                    </label>
+                    <select
+                      value={selectedRedemptionStore?.id || ''}
+                      onChange={(e) => {
+                        const store = ALL_STORE_LOCATIONS.find(s => s.id === e.target.value);
+                        setSelectedRedemptionStore(store || null);
+                      }}
+                      className="input-field"
+                      required
+                    >
+                      <option value="">Selecione uma loja</option>
+                      {ALL_STORE_LOCATIONS.map(store => (
+                        <option key={store.id} value={store.id}>
+                          {store.name}
+                          {userLocation && (
+                            ` - ${formatDistance(userLocation, store)}`
+                          )}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowRedemptionForm(false);
+                        setRedemptionAmount('');
+                      }}
+                      className="btn-secondary flex-1"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmitting || !selectedRedemptionStore || !redemptionAmount}
+                      className="btn-primary flex-1"
+                    >
+                      {isSubmitting ? 'Processando...' : 'Resgatar'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </div>
+
+          {/* Transactions History */}
+          <div className="glass-card p-8">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="card-header !mb-0">
+                <History className="w-6 h-6 text-purple-600" />
+                Minhas Transações
+              </h2>
+              <div className="flex rounded-lg border border-purple-100 p-1">
+                <button
+                  onClick={() => setActiveTab('purchases')}
+                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                    activeTab === 'purchases'
+                      ? 'bg-purple-100 text-purple-700'
+                      : 'text-gray-600 hover:text-purple-600'
+                  }`}
+                >
+                  Compras
+                </button>
+                <button
+                  onClick={() => setActiveTab('redemptions')}
+                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                    activeTab === 'redemptions'
+                      ? 'bg-purple-100 text-purple-700'
+                      : 'text-gray-600 hover:text-purple-600'
+                  }`}
+                >
+                  Resgates
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {currentTransactions.map(transaction => (
+                <div key={transaction.id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {getTransactionIcon(transaction.type, transaction.status)}
+                      <div>
+                        <div className="font-medium text-gray-900">
+                          {formatCurrency(parseFloat(transaction.amount))}
+                        </div>
+                        <div className="text-sm text-gray-600">
+                          {formatDate(transaction.created_at)}
+                        </div>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div className="font-medium">
-                        R$ {transaction.amount.toFixed(2)}
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(transaction.status)}`}>
+                        {getStatusText(transaction.status)}
+                      </span>
+                      <button
+                        onClick={() => setExpandedTransactionId(
+                          expandedTransactionId === transaction.id ? null : transaction.id
+                        )}
+                        className="p-1 text-gray-400 hover:text-gray-600"
+                      >
+                        {expandedTransactionId === transaction.id ? 
+                          <ChevronUp className="w-4 h-4" /> : 
+                          <ChevronDown className="w-4 h-4" />
+                        }
+                      </button>
+                    </div>
+                  </div>
+
+                  {expandedTransactionId === transaction.id && (
+                    <div className="mt-3 pt-3 border-t border-gray-200 space-y-2">
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                          <span className="text-gray-500">Tipo:</span>
+                          <span className="ml-2 font-medium">
+                            {transaction.type === 'purchase' ? 'Compra' : 'Resgate'}
+                          </span>
+                        </div>
+                        {transaction.type === 'purchase' && (
+                          <div>
+                            <span className="text-gray-500">Cashback:</span>
+                            <span className="ml-2 font-medium text-green-600">
+                              {formatCurrency(parseFloat(transaction.cashback_amount))}
+                            </span>
+                          </div>
+                        )}
+                        {transaction.expires_at && (
+                          <div>
+                            <span className="text-gray-500">Expira em:</span>
+                            <span className="ml-2 font-medium">
+                              {new Date(transaction.expires_at).toLocaleDateString('pt-BR')}
+                            </span>
+                          </div>
+                        )}
+                        {transaction.location && (
+                          <div>
+                            <span className="text-gray-500">Localização:</span>
+                            <span className="ml-2 font-medium">
+                              <MapPin className="w-3 h-3 inline mr-1" />
+                              Registrada
+                            </span>
+                          </div>
+                        )}
                       </div>
-                      {transaction.type === 'purchase' && (
-                        <div className="text-sm text-purple-600">
-                          + R$ {transaction.cashback_amount.toFixed(2)} cashback
+                      {transaction.comment && (
+                        <div className="text-sm">
+                          <span className="text-gray-500">Observação:</span>
+                          <span className="ml-2">{transaction.comment}</span>
                         </div>
                       )}
-                    
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between mt-2">
-                    <div className="flex items-center gap-2">
-                      {transaction.status === 'approved' ? (
-                        <>
-                          <CheckCircle2 className="w-4 h-4 text-green-500" />
-                          <span className="text-sm text-green-600">Aprovado</span>
-                        </>
-                      ) : transaction.status === 'pending' ? (
-                        <>
-                          <Clock className="w-4 h-4 text-orange-500" />
-                          <span className="text-sm text-orange-600">Pendente</span>
-                        </>
-                      ) : (
-                        <>
-                          <XCircle className="w-4 h-4 text-red-500" />
-                          <span className="text-sm text-red-600">Rejeitado</span>
-                        </>
-                      )}
-                    </div>
-                    {expandedTransactionId === transaction.id ? (
-                      <ChevronUp className="w-4 h-4 text-gray-400" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 text-gray-400" />
-                    )}
-                  </div>
-                </button>
-
-                {expandedTransactionId === transaction.id && (
-                  <div className="mt-4 pt-4 border-t border-gray-100">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-600">ID da Transação</span>
-                        <span className="font-mono text-gray-900">{transaction.id}</span>
-                      </div>
                       {transaction.receipt_url && (
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-gray-600">Comprovante</span>
-                          <a
-                            href={transaction.receipt_url}
-                            target="_blank"
+                        <div className="text-sm">
+                          <a 
+                            href={transaction.receipt_url} 
+                            target="_blank" 
                             rel="noopener noreferrer"
-                            className="text-purple-600 hover:text-purple-700 transition-colors flex items-center gap-1"
+                            className="text-purple-600 hover:text-purple-700 inline-flex items-center gap-1"
                           >
-                            <Receipt className="w-4 h-4" />
-                            Ver comprovante
+                            <Receipt className="w-3 h-3" />
+                            Ver Comprovante
                           </a>
                         </div>
                       )}
-                      {transaction.type === 'purchase' && transaction.expires_at && (
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-gray-600">Cashback expira em</span>
-                          <span className="text-gray-900">
-                            {new Date(transaction.expires_at).toLocaleDateString('pt-BR')}
-                          </span>
-                        </div>
-                      )}
                     </div>
-                  </div>
-                )}
-              </div>
-            ))}
-        </div>
-      </div>
+                  )}
+                </div>
+              ))}
+
+              {/* Pagination Controls */}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between mt-6 pt-4 border-t border-purple-100">
+                  <button
+                    onClick={handlePreviousPage}
+                    disabled={currentPage === 1}
+                    className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-purple-600 rounded-lg hover:bg-purple-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    Anterior
+                  </button>
+                  <span className="text-sm text-gray-600">
+                    Página {currentPage} de {totalPages}
+                  </span>
+                  <button
+                    onClick={handleNextPage}
+                    disabled={currentPage === totalPages}
+                    className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-purple-600 rounded-lg hover:bg-purple-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Próxima
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {currentTransactions.length === 0 && (
+                <div className="text-center text-gray-500 py-8">
+                  Nenhuma transação encontrada
+                </div>
+              )}
+            </div>
+          </div>
+
+          <PromoMessage />
+        </>
+      )}
+
+      {/* Cashback Animation */}
+      {showCashbackAnimation && (
+        <CashbackAnimation
+          amount={lastCashbackAmount}
+          onComplete={() => setShowCashbackAnimation(false)}
+        />
+      )}
+
+      {/* Confirmation Modals */}
+      <ConfirmationModal
+        isOpen={showPurchaseConfirmation}
+        onClose={() => setShowPurchaseConfirmation(false)}
+        onConfirm={() => {
+          setShowPurchaseConfirmation(false);
+          // Handle purchase confirmation
+        }}
+        title="Confirmar Compra"
+        message={`Confirma a compra de ${formatCurrency(parseFloat(transactionAmount || '0'))} na loja ${selectedStore?.name}?`}
+        confirmText="Confirmar"
+        cancelText="Cancelar"
+      />
+
+      <ConfirmationModal
+        isOpen={showRedemptionConfirmation}
+        onClose={() => setShowRedemptionConfirmation(false)}
+        onConfirm={() => {
+          setShowRedemptionConfirmation(false);
+          // Handle redemption confirmation
+        }}
+        title="Confirmar Resgate"
+        message={`Confirma o resgate de ${formatCurrency(parseFloat(redemptionAmount || '0'))} na loja ${selectedRedemptionStore?.name}?`}
+        confirmText="Confirmar"
+        cancelText="Cancelar"
+      />
     </div>
   );
 }
+
+export default ClientDashboard;

@@ -30,6 +30,17 @@ export interface Transaction {
     latitude: number;
     longitude: number;
   };
+  comment?: string;
+}
+
+export interface Credit {
+  id: string;
+  customer_id: string;
+  amount: number;
+  expires_at: string;
+  created_at: string;
+  status: 'pending' | 'approved' | 'rejected';
+  payment_method: 'pix' | 'credit_card' | 'debit_card' | 'cash';
 }
 
 export interface Admin {
@@ -44,6 +55,8 @@ export interface WhatsAppNotification {
   customerId: string;
   amount?: number;
   cashbackAmount?: number;
+  title?: string;
+  date?: string;
 }
 
 export interface DuplicateCheck {
@@ -57,29 +70,43 @@ export interface StoreLocation {
   latitude: number;
   longitude: number;
   radius: number; // in meters
+  address: string;
+  distance?: number;
 }
 
-// Store locations for geofencing
+export interface CustomerBalance {
+  customer_id: string;
+  available_balance: number;
+  expiring_amount: number | null;
+  expiration_date: string | null;
+}
+
+// Store locations for geofencing - Using actual store IDs from the database
 export const STORE_LOCATIONS: StoreLocation[] = [
   {
-    id: 'store1',
-    name: 'Elite Açaí 1',
-    latitude: -3.859981833155958,
-    longitude: -38.63311136233465,
-    radius: 40 // 40 meters radius
+    id: '550e8400-e29b-41d4-a716-446655440000', // Updated to match database ID
+    name: 'Loja 1: Rua Dois, 2130‑A, Residencial 1 – Cágado',
+    latitude: -3.7456789,
+    longitude: -38.5678901,
+    radius: 50, // 50 meters radius
+    address: 'Rua Dois, 2130‑A, Residencial 1 – Cágado'
   },
   {
-    id: 'store2',
-    name: 'Elite Açaí 2',
-    latitude: -3.8585200957980037,
-    longitude: -38.63444706015108,
-    radius: 40 // 40 meters radius
-  },
-  {
-    id: 'store3',
-    name: 'Elite Açaí 3',
-    latitude: -3.8633379,
-    longitude: -38.6319105,
-    radius: 40 // 40 meters radius
+    id: '550e8400-e29b-41d4-a716-446655440001', // Updated to match database ID
+    name: 'Loja 2: Rua Um, 1614‑C, Residencial 1 – Cágado',
+    latitude: -3.7567890,
+    longitude: -38.5789012,
+    radius: 50, // 50 meters radius
+    address: 'Rua Um, 1614‑C, Residencial 1 – Cágado'
   }
 ];
+
+// Test store location for development/testing - Using actual store ID from database
+export const TEST_STORE: StoreLocation = {
+  id: '550e8400-e29b-41d4-a716-446655440002', // Updated to match database ID
+  name: 'Loja Teste',
+  latitude: -3.863168620348435,
+  longitude: -38.631793933498614,
+  radius: 1000, // 1km radius for testing
+  address: 'Endereço de Teste'
+};
