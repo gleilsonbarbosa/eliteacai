@@ -98,15 +98,13 @@ export const STORE_LOCATIONS: StoreLocation[] = [
     longitude: -38.5789012,
     radius: 50, // 50 meters radius
     address: 'Rua Um, 1614‑C, Residencial 1 – Cágado'
+  },
+  {
+    id: '550e8400-e29b-41d4-a716-446655440002',
+    name: 'Loja Teste: R. 8, 574b - Cagado, Maracanaú - CE, 61912-190',
+    latitude: -3.8630508612761942,
+    longitude: -38.631815417822644,
+    radius: 300, // 300 meters radius
+    address: 'R. 8, 574b - Cagado, Maracanaú - CE, 61912-190'
   }
 ];
-
-// Test store location for development/testing - Using actual store ID from database
-export const TEST_STORE: StoreLocation = {
-  id: '550e8400-e29b-41d4-a716-446655440002', // Updated to match database ID
-  name: 'Loja Teste',
-  latitude: -3.863168620348435,
-  longitude: -38.631793933498614,
-  radius: 1000, // 1km radius for testing
-  address: 'Endereço de Teste'
-};
